@@ -1,61 +1,81 @@
-"""make.fun entry: World news of 26 November 2026 in one image.
+#!/usr/bin/env python3
+"""Copy the news-image entry (entry.png) to the grading output directory.
 
-Copies the entry image (entry.png, next to this file) byte-for-byte
-into the output directory: $MAKEFUN_OUTPUT_DIR when set, else /output.
-Before copying it validates the PNG signature; after copying it checks
-the copy matches the source in size and SHA-256. Standard library only.
+Stdlib only. The image is copied byte-for-byte; the copy is verified
+afterwards by size and SHA-256 so a truncated write can never pass silently.
 """
+
 import hashlib
 import os
 import shutil
-from pathlib import Path
+import sys
 
-HERE = Path(__file__).resolve().parent
-SOURCE = HERE / "entry.png"
-PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+SOURCE = "entry.png"
+MAX_BYTES = 1024 * 1024
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def sha256_of(path):
     digest = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
 
 def main():
-    if not SOURCE.is_file():
-        raise SystemExit(f"entry image missing: {SOURCE}")
-    if SOURCE.stat().st_size == 0:
-        raise SystemExit(f"entry image is empty: {SOURCE}")
-    if SOURCE.stat().st_size > 1024 * 1024:
-        raise SystemExit(
-            f"entry image over the 1 MiB limit: {SOURCE.stat().st_size} bytes")
-    with open(SOURCE, "rb") as f:
-        signature = f.read(len(PNG_SIGNATURE))
-    if signature != PNG_SIGNATURE:
-        raise SystemExit(f"{SOURCE} is not a PNG file (bad signature)")
-    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-    out_dir.mkdir(parents=True, exist_ok=True)
-    dest = out_dir / "entry.png"
-    shutil.copyfile(SOURCE, dest)
-    with open(dest, "rb") as f:
-        dest_signature = f.read(len(PNG_SIGNATURE))
-    if dest_signature != PNG_SIGNATURE:
-        raise SystemExit(f"{dest} is not a PNG file after copy (bad signature)")
-    src_size = SOURCE.stat().st_size
-    dst_size = dest.stat().st_size
-    if dst_size != src_size:
-        raise SystemExit(
-            f"size mismatch after copy: source {src_size} bytes, "
-            f"copy {dst_size} bytes")
-    src_hash = sha256_of(SOURCE)
-    dst_hash = sha256_of(dest)
-    if dst_hash != src_hash:
-        raise SystemExit(
-            f"SHA-256 mismatch after copy: source {src_hash}, copy {dst_hash}")
-    print(f"copied {SOURCE} -> {dest} ({dst_size} bytes, sha256 {dst_hash})")
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    source = os.path.join(os.path.dirname(os.path.abspath(__file__)), SOURCE)
+
+    if not os.path.isfile(source):
+        print(f"error: {SOURCE} not found next to {__file__}", file=sys.stderr)
+        return 1
+
+    with open(source, "rb") as handle:
+        magic = handle.read(len(PNG_MAGIC))
+    if magic != PNG_MAGIC:
+        print("error: entry.png is not a PNG file", file=sys.stderr)
+        return 1
+
+    size = os.path.getsize(source)
+    if size > MAX_BYTES:
+        print(f"error: entry.png is {size} bytes, over the {MAX_BYTES} limit",
+              file=sys.stderr)
+        return 1
+
+    if os.path.exists(out_dir) and not os.path.isdir(out_dir):
+        print(f"error: output path {out_dir} exists and is not a directory",
+              file=sys.stderr)
+        return 1
+
+    os.makedirs(out_dir, exist_ok=True)
+    destination = os.path.join(out_dir, SOURCE)
+
+    # Never clobber the entry itself: refuse if the output resolves to
+    # the same file as the source (e.g. MAKEFUN_OUTPUT_DIR pointing
+    # at the repo directory).
+    if os.path.abspath(destination) == os.path.abspath(source):
+        print("error: output directory is the source directory; "
+              "refusing to copy entry.png onto itself", file=sys.stderr)
+        return 1
+
+    shutil.copyfile(source, destination)
+
+    copied_size = os.path.getsize(destination)
+    if copied_size != size:
+        print(f"error: copied size {copied_size} != source size {size}",
+              file=sys.stderr)
+        return 1
+
+    source_hash = sha256_of(source)
+    copied_hash = sha256_of(destination)
+    if copied_hash != source_hash:
+        print("error: SHA-256 mismatch after copy", file=sys.stderr)
+        return 1
+
+    print(f"copied {SOURCE}: {size} bytes, sha256 {source_hash}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
